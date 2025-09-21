@@ -1,9 +1,10 @@
 from scapy.all import sniff
-from scapy.layers.inet import IP
+from scapy.layers.inet import IP, TCP, UDP
 from rule_manager import load_rules, RULES_FILE
 import logging
 import os
 import time
+from ml_detector import evaluate_packet, ML_DETECT_ENFORCE
 
 LOG_FILE = 'firewall/logs/firewall.log'
 
@@ -59,6 +60,27 @@ def packet_callback(packet):
         if src_ip in _blocked_ip_set or dst_ip in _blocked_ip_set:
             logging.info(f"Blocked packet from {src_ip} to {dst_ip}")
             return  # Drop the packet by not forwarding it
+
+        # Optional ML-based detection (local, no API key)
+        try:
+            proto = 'tcp' if TCP in packet else ('udp' if UDP in packet else str(packet[IP].proto))
+            src_port = packet[TCP].sport if TCP in packet else (packet[UDP].sport if UDP in packet else '')
+            dst_port = packet[TCP].dport if TCP in packet else (packet[UDP].dport if UDP in packet else '')
+            metadata = {
+                'src_ip': src_ip,
+                'dst_ip': dst_ip,
+                'proto': str(proto),
+                'src_port': str(src_port),
+                'dst_port': str(dst_port),
+                'length': str(len(packet))
+            }
+            decision, reason = evaluate_packet(metadata)
+            if decision == 'block' and ML_DETECT_ENFORCE:
+                logging.info(f"Blocked (ML) packet from {src_ip} to {dst_ip} reason={reason}")
+                return
+        except Exception:
+            # ML path is best-effort; ignore errors to keep fast path reliable
+            pass
 
         # Log allowed packets
         logging.info(f"Allowed packet from {src_ip} to {dst_ip}")
